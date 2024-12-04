@@ -260,7 +260,7 @@ class EC2InstanceManager(BaseManager):
 
     @staticmethod
     def get_os_details(instance):
-        return instance.get("PlatformDetails", "Linux/UNIX")
+        return instance.get("PlatformDetails", "")
 
     @staticmethod
     def extract_os_distro(image_name, os_type):
