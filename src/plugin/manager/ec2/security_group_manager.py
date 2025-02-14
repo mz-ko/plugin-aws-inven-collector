@@ -37,7 +37,7 @@ class SecurityGroupManager(ResourceManager):
         cloudtrail_resource_type = "AWS::EC2::SecurityGroup"
 
         # If Port Filter Option Exist
-        vulnerable_ports = options.get("vulnerable_ports", DEFAULT_VULNERABLE_PORTS)
+        vulnerable_ports = options.get("vulnerable_ports")
 
         # Get default VPC
         default_vpcs = self._get_default_vpc()
@@ -70,12 +70,12 @@ class SecurityGroupManager(ResourceManager):
                                 )
                             )
 
-                        for _user_group_pairs in in_rule.get("UserIdGroupPairs", []):
+                        for _user_group_pair in in_rule.get("UserIdGroupPairs", []):
                             in_rule_copy = copy.deepcopy(in_rule)
                             inbound_rules.append(
                                 self.custom_security_group_inbound_rule_info(
                                     in_rule_copy,
-                                    _user_group_pairs,
+                                    _user_group_pair,
                                     "user_id_group_pairs",
                                     vulnerable_ports,
                                 )
@@ -86,6 +86,14 @@ class SecurityGroupManager(ResourceManager):
                             inbound_rules.append(
                                 self.custom_security_group_inbound_rule_info(
                                     in_rule_copy, _ip_v6_range, "ipv6_ranges",vulnerable_ports
+                                )
+                            )
+
+                        for prefix_list_id in in_rule.get("PrefixListIds", []):
+                            in_rule_copy = copy.deepcopy(in_rule)
+                            inbound_rules.append(
+                                self.custom_security_group_inbound_rule_info(
+                                    in_rule_copy, prefix_list_id, "prefix_list_ids",vulnerable_ports
                                 )
                             )
 
@@ -118,16 +126,27 @@ class SecurityGroupManager(ResourceManager):
                                 )
                             )
 
+                        for prefix_list_id in out_rule.get("PrefixListIds", []):
+                            out_rule_copy = copy.deepcopy(out_rule)
+                            outbound_rules.append(
+                                self.custom_security_group_rule_info(
+                                    out_rule_copy, prefix_list_id, "prefix_list_ids"
+                                )
+                            )
+
+                    match_instances = self.get_security_group_map_instances(
+                        raw, instances
+                    )
+
                     raw.update(
                         {
                             "ip_permissions": inbound_rules,
                             "ip_permissions_egress": outbound_rules,
-                            "instances": self.get_security_group_map_instances(
-                                raw, instances
-                            ),
+                            "instances": match_instances,
                             "cloudtrail": self.set_cloudtrail(
                                 region, cloudtrail_resource_type, raw["GroupId"]
                             ),
+                            "stats": {"instances_count": len(match_instances)},
                         }
                     )
                     sg_vo = raw
@@ -170,7 +189,15 @@ class SecurityGroupManager(ResourceManager):
 
         protocol_display = raw_rule.get("protocol_display")
 
-        raw_rule.update({"vulnerable_ports": self._get_vulnerable_ports(protocol_display, raw_rule, vulnerable_ports)})
+        if vulnerable_ports:
+            ports = self._get_vulnerable_ports(protocol_display, raw_rule, vulnerable_ports)
+
+            raw_rule.update(
+                {
+                    "vulnerable_ports": ports,
+                    "detected_vulnerable_ports": True if ports else False
+                }
+            )
 
         return raw_rule
 
@@ -283,6 +310,8 @@ class SecurityGroupManager(ResourceManager):
             return group_id
         elif cidrv6 := remote.get("CidrIpv6"):
             return cidrv6
+        elif prefix_list_id := remote.get("PrefixListId"):
+            return prefix_list_id
 
         return ""
 
@@ -303,24 +332,6 @@ class SecurityGroupManager(ResourceManager):
 
     @staticmethod
     def _get_vulnerable_ports(protocol_display: str, raw_rule: dict, vulnerable_ports: str):
-        # try:
-        #     ports = [int(port.strip()) for port in vulnerable_ports.split(',')]
-        #
-        #     if protocol_display == "ALL":
-        #         return ports
-        #
-        #     to_port = raw_rule.get("ToPort")
-        #     from_port = raw_rule.get("FromPort")
-        #
-        #     if to_port is None or from_port is None:
-        #         return None
-        #
-        #     filtered_ports = [str(port) for port in ports if from_port <= port <= to_port]
-        #
-        #     return filtered_ports if filtered_ports else None
-        # except ValueError:
-        #     raise ERROR_VULNERABLE_PORTS(vulnerable_ports)
-
         try:
             ports = []
 
@@ -337,6 +348,7 @@ class SecurityGroupManager(ResourceManager):
                     ports.append(port)
                 elif from_port <= target_port <= to_port:
                     ports.append(port)
-            return ports if ports else None
+
+            return ",".join(ports)
         except ValueError:
             raise ERROR_VULNERABLE_PORTS(vulnerable_ports)
